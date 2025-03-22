@@ -16,7 +16,7 @@ Valós idejű kijelző rendszer Audi A4 B7-hez, ESP32 + MCP2515-M alapokon, amel
 | **Step-down modul (STDN-3A24-ADJ)** | 12V → 5V táptápegység az ESP32-hez |
 | **Kondenzátor** | Tápfeszültség stabilizáláshoz |
 | **Piezo buzzer (SFN-12055PA6.5)** | Hangjelzés figyelmeztetés esetén |
-| **RGB LED (common cathode)** | Vizuális állapotjelző |
+| **RGB LED** | Vizuális állapotjelző |
 | **DEPO Racing olajnyomás küldő** | Extra, nem gyári szenzor |
 
 ---
