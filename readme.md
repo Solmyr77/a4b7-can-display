@@ -18,6 +18,7 @@ Valós idejű kijelző rendszer Audi A4 B7-hez, ESP32 + MCP2515-M alapokon, amel
 | **Piezo buzzer (SFN-12055PA6.5)** | Hangjelzés figyelmeztetés esetén |
 | **RGB LED** | Vizuális állapotjelző |
 | **DEPO Racing olajnyomás küldő** | Extra, nem gyári szenzor |
+| **2(?) OLED kijelző (1.3" I2C)** | Adatok megjelenítése valós időben |
 
 ---
 
@@ -53,7 +54,7 @@ Valós idejű kijelző rendszer Audi A4 B7-hez, ESP32 + MCP2515-M alapokon, amel
 |------------------|----------------------------------|
 | **Piezo buzzer** | Kritikus figyelmeztetés (olaj, hőmérséklet, boost) |
 | **RGB LED**      | Állapotjelzés (zöld = OK, piros = hiba, sárga = figyelem) |
-| **OLED/TFT kijelző** | Adatok megjelenítése valós időben |
+| **OLED kijelző** | Adatok megjelenítése valós időben |
 
 ---
 
