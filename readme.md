@@ -1,7 +1,7 @@
 # CANBUS Kijelző - Audi A4 B7
 
 ## 🚗 Projekt célja
-Valós idejű kijelző rendszer Audi A4 B7-hez, ESP32 + MCP2515-M alapúkon, amely CAN buszról olvas motordiagnosztikai adatokat és extra szenzorokat is kezel.
+Valós idejű kijelző rendszer Audi A4 B7-hez, ESP32 + MCP2515-M alapokon, amely CAN buszról olvas motordiagnosztikai adatokat és extra szenzorokat is kezel.
 
 ---
 
@@ -14,7 +14,7 @@ Valós idejű kijelző rendszer Audi A4 B7-hez, ESP32 + MCP2515-M alapúkon, ame
 | **150 Ω ellenállás** | Feszültség-osztó az olajnyomás szenzorhoz |
 | **1k + 2k Ω ellenállás** | MISO vonal feszültség osztáshoz (5V → 3.3V) |
 | **Step-down modul (STDN-3A24-ADJ)** | 12V → 5V táptápegység az ESP32-hez |
-| **Kondenzátor** | Tápegység stabilizáláshoz |
+| **Kondenzátor** | Tápfeszültség stabilizáláshoz |
 | **Piezo buzzer (SFN-12055PA6.5)** | Hangjelzés figyelmeztetés esetén |
 | **RGB LED (common cathode)** | Vizuális állapotjelző |
 | **DEPO Racing olajnyomás küldő** | Extra, nem gyári szenzor |
@@ -53,7 +53,7 @@ Valós idejű kijelző rendszer Audi A4 B7-hez, ESP32 + MCP2515-M alapúkon, ame
 |------------------|----------------------------------|
 | **Piezo buzzer** | Kritikus figyelmeztetés (olaj, hőmérséklet, boost) |
 | **RGB LED**      | Állapotjelzés (zöld = OK, piros = hiba, sárga = figyelem) |
-| **OLED/TFT kijelző** | (opcionális) Adatok megjelenítése valós időben |
+| **OLED/TFT kijelző** | Adatok megjelenítése valós időben |
 
 ---
 
