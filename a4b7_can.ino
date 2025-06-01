@@ -1,243 +1,242 @@
 #include <Arduino.h>
-#include <mcp_can.h>
 #include <SPI.h>
 #include <Wire.h>
-#include "SPI.h"
-#include "Adafruit_GFX.h"
-#include "Adafruit_ILI9341.h"
-#include "FS.h"
-#include "SPIFFS.h"
+#include <FS.h>
+#include <SPIFFS.h>
+#include <mcp_can.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ILI9341.h>
 
-// TFT (HSPI)
-#define TFT_DC 2
-#define TFT_CS 15
-#define TFT_MOSI 13
-#define TFT_CLK 14
-#define TFT_RST 27
-#define TFT_MISO 12
-#define TFT_POWER_CTRL 26
-// CAN (VSPI)
-#define MCP_CS_PIN 5
-#define MCP_INT_PIN 4
+#define DEBUG_SERIAL Serial
+#define LOG_PREFIX "[LOG] "
+#define LOG_START() DEBUG_SERIAL.printf(LOG_PREFIX "--> %s START\n", __func__);
+#define LOG_END()   DEBUG_SERIAL.printf(LOG_PREFIX "<-- %s END\n", __func__);
+#define LOG_LINE()  DEBUG_SERIAL.printf(LOG_PREFIX "%s:%d\n", __FILE__, __LINE__);
+#define LOG_MSG(msg) DEBUG_SERIAL.printf(LOG_PREFIX "%s: %s\n", __func__, msg);
+#define LOG_VAL(label, val) DEBUG_SERIAL.printf(LOG_PREFIX "%s: %s = %s\n", __func__, label, String(val).c_str());
+
+// TFT Display (HSPI)
+#define TFT_DC           2
+#define TFT_CS           15
+#define TFT_MOSI         13
+#define TFT_CLK          14
+#define TFT_RST          27
+#define TFT_MISO         12
+#define TFT_POWER_CTRL   26
+
+// CAN Controller (VSPI)
+#define MCP_CS_PIN       5
+#define MCP_INT_PIN      4
 
 SPIClass tftHSPI(HSPI);
-Adafruit_ILI9341 tft = Adafruit_ILI9341(&tftHSPI, TFT_DC, TFT_CS, TFT_RST);
+Adafruit_ILI9341 tft(&tftHSPI, TFT_DC, TFT_CS, TFT_RST);
 MCP_CAN CAN(MCP_CS_PIN);
 
+constexpr unsigned long INACTIVITY_TIMEOUT = 10000;
 unsigned long lastCanMessageTime = 0;
-const unsigned long inactivityTimeout = 10000'0000;
 int selectedScreen = 0;
 
-String prevTemperature = "";
-String prevVolt = "";
-String prevRPM = "";
-String prevPressure = "";
-String prevCoolant = "";
-String prevIAT = "";
-String prevBoost = "";
-String prevSpeed = "";
+String prevTemperature, prevPressure, prevRPM, prevCoolant, prevIAT, prevBoost;
 
-float temperatureVoltages[] = { 2.979, 1.586, 0.79, 0.354, 0.163, 0.102 };
-float temperatureValues[] = { 21, 40, 70, 100, 130, 150 };
-float pressureVoltages[] = { 0.065, 0.61, 1.194, 1.551, 1.703 };
-float pressureValues[] = { 0, 2, 5, 8, 10 };
+portMUX_TYPE spiMutex = portMUX_INITIALIZER_UNLOCKED;
 
-bool drawRawImage(const char *filename, int16_t x, int16_t y, int w, int h) {
-  File f = SPIFFS.open(filename, "r");
-  if (!f) {
-    Serial.print("Failed to open file: ");
-    Serial.println(filename);
+const float temperatureVoltages[] = { 2.979, 1.586, 0.79, 0.354, 0.163, 0.102 };
+const float temperatureValues[]   = { 21, 40, 70, 100, 130, 150 };
+const float pressureVoltages[]    = { 0.065, 0.61, 1.194, 1.551, 1.703 };
+const float pressureValues[]      = { 0, 2, 5, 8, 10 };
+
+byte canBuf[8] = {0};  // Global buffer
+
+float interpolate(const float *voltages, const float *values, size_t count, float inputVoltage) {
+  LOG_START();
+  DEBUG_SERIAL.printf("Input Voltage: %.3f\n", inputVoltage);
+  for (size_t i = 0; i < count - 1; ++i) {
+    float v1 = voltages[i], v2 = voltages[i + 1];
+    float val1 = values[i], val2 = values[i + 1];
+    DEBUG_SERIAL.printf("Checking segment: %.3f-%.3f\n", v1, v2);
+    if ((v1 >= inputVoltage && inputVoltage >= v2) || (v2 >= inputVoltage && inputVoltage >= v1)) {
+      float result = val1 + (inputVoltage - v1) * (val2 - val1) / (v2 - v1);
+      DEBUG_SERIAL.printf("Interpolated Result: %.2f\n", result);
+      LOG_END();
+      return result;
+    }
+  }
+  DEBUG_SERIAL.println("Voltage out of range!");
+  LOG_END();
+  return -1;
+}
+
+void drawTextDiff(const String &newText, String &prevText, int x, int y, uint8_t size, uint16_t color) {
+  if (newText == prevText) return;
+  int charWidth = 6 * size;
+  portENTER_CRITICAL(&spiMutex);
+  tft.setTextSize(size);
+  for (int i = 0; i < newText.length(); i++) {
+    char newChar = newText[i];
+    char oldChar = (i < prevText.length()) ? prevText[i] : 0;
+    if (newChar != oldChar) {
+      tft.setCursor(x + i * charWidth, y);
+      tft.setTextColor(color, ILI9341_BLACK);
+      tft.print(newChar);
+    }
+  }
+  portEXIT_CRITICAL(&spiMutex);
+  prevText = newText;
+}
+
+bool drawRawImage(const char *filename, int x, int y, int w, int h) {
+  LOG_START();
+  DEBUG_SERIAL.printf("Opening file: %s\n", filename);
+  File file = SPIFFS.open(filename, "r");
+  if (!file) {
+    DEBUG_SERIAL.println("File open failed");
     return false;
   }
+
   uint16_t *lineBuf = (uint16_t *)malloc(w * 2);
   if (!lineBuf) {
-    Serial.println("Out of memory!");
-    f.close();
+    DEBUG_SERIAL.println("malloc failed");
+    file.close();
     return false;
   }
+
   for (int row = 0; row < h; row++) {
-    f.read((uint8_t *)lineBuf, w * 2);
+    if (file.read((uint8_t *)lineBuf, w * 2) != w * 2) {
+      DEBUG_SERIAL.printf("File read failed at row: %d\n", row);
+      break;
+    }
+    portENTER_CRITICAL(&spiMutex);
     tft.drawRGBBitmap(x, y + row, lineBuf, w, 1);
+    portEXIT_CRITICAL(&spiMutex);
   }
+
   free(lineBuf);
-  f.close();
+  file.close();
+  DEBUG_SERIAL.println("Image draw complete");
+  LOG_END();
   return true;
 }
 
 void initDisplay() {
+  LOG_START();
+  pinMode(TFT_POWER_CTRL, OUTPUT);
   digitalWrite(TFT_POWER_CTRL, HIGH);
-  delay(100);
-
+  delay(200);
   SPIFFS.begin(true);
   tftHSPI.begin(TFT_CLK, TFT_MISO, TFT_MOSI, TFT_CS);
-  delay(1000);
+  delay(100);
   tft.begin();
   tft.writeCommand(ILI9341_SLPOUT);
   tft.writeCommand(ILI9341_DISPON);
   tft.setRotation(3);
   tft.fillScreen(ILI9341_BLACK);
+  LOG_END();
 }
 
-void initCan() {
+void initCAN() {
+  LOG_START();
   while (CAN_OK != CAN.begin(MCP_ANY, CAN_500KBPS, MCP_8MHZ)) {
-    tft.setCursor(0, 50);
-    tft.setTextColor(ILI9341_RED);
-    tft.setTextSize(3);
-    tft.println("CAN Init failed");
-    tft.println("retrying . . .");
+    DEBUG_SERIAL.println("CAN init failed, retrying...");
     delay(1000);
   }
   CAN.setMode(MCP_LISTENONLY);
-  tft.fillScreen(ILI9341_BLACK);
   drawRawImage("/startup.raw", 0, 0, 320, 240);
   delay(3000);
-  tft.fillScreen(ILI9341_BLACK);
+  LOG_END();
 }
 
 void setup() {
-  Serial.begin(115200);
-
-  esp_reset_reason_t r = esp_reset_reason();
-  Serial.printf("Last reset reason: %d\n", r);
-
-  pinMode(MCP_INT_PIN, INPUT_PULLUP);
-  pinMode(TFT_POWER_CTRL, OUTPUT);
-
+  LOG_START();
+  DEBUG_SERIAL.begin(115200);
+  delay(300);
+  DEBUG_SERIAL.printf("Reset reason: %d\n", esp_reset_reason());
   initDisplay();
-  initCan();
-
-  /*if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
-    Serial.println("Woke up from CAN interrupt.");
-  }*/
-
+  initCAN();
   lastCanMessageTime = millis();
-}
-
-float interpolate(float *voltage, float *value, int count, float inputVoltage) {
-  for (int i = 0; i < count - 1; i++) {
-    float v1 = voltage[i];
-    float v2 = voltage[i + 1];
-    float val1 = value[i];
-    float val2 = value[i + 1];
-    if ((v1 >= inputVoltage && inputVoltage >= v2) || (v2 >= inputVoltage && inputVoltage >= v1)) {
-      return val1 + (inputVoltage - v1) * (val2 - val1) / (v2 - v1);
-    }
-  }
-  if (inputVoltage > voltage[0]) return value[0];
-  if (inputVoltage < voltage[count - 1]) return value[count - 1];
-  return -1;
-}
-
-void drawTextDiff(String newText, String &prevText, int x, int y, uint8_t textSize, uint16_t color) {
-  int charW = 6 * textSize;
-  tft.setTextSize(textSize);
-  tft.setTextColor(color, ILI9341_BLACK);
-  for (int i = 0; i < newText.length(); i++) {
-    char newChar = newText[i];
-    char oldChar = (i < prevText.length()) ? prevText[i] : 0;
-    if (newChar != oldChar) {
-      tft.setCursor(x + i * charW, y);
-      tft.print(newChar);
-    }
-  }
-  prevText = newText;
+  LOG_END();
 }
 
 void loop() {
+  LOG_START();
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
-  float temperatureVoltage = float(analogReadMilliVolts(33)) / 1000;
-  float pressureVoltage = float(analogReadMilliVolts(34)) / 1000;
 
-  float temperatureValue = interpolate(temperatureVoltages, temperatureValues, 6, temperatureVoltage);
-  float pressureValue = interpolate(pressureVoltages, pressureValues, 5, pressureVoltage);
+  float temperatureVoltage = analogReadMilliVolts(33) / 1000.0;
+  float pressureVoltage    = analogReadMilliVolts(34) / 1000.0;
 
-  String textTemperature = "OIL: " + String(temperatureValue, 0);
-  // String textVolt = "VOLT: " + String(pressureVoltage, 2);
-  String textPressure = "PRESS: " + String(pressureValue, 2);
+  float oilTemp = interpolate(temperatureVoltages, temperatureValues, 6, temperatureVoltage);
+  float oilPress = interpolate(pressureVoltages, pressureValues, 5, pressureVoltage);
 
-  drawTextDiff(textTemperature, prevTemperature, 10, 10, 3, ILI9341_YELLOW);
-  // drawTextDiff(textVolt, prevVolt, 10, 50, 3, ILI9341_GREEN);
-  drawTextDiff(textPressure, prevPressure, 10, 50, 3, ILI9341_GREEN);
-
-  long unsigned int rxId;
-  unsigned char len = 0;
-  unsigned char rxBuf[8];
+  drawTextDiff("OIL: " + String(oilTemp, 0), prevTemperature, 10, 10, 3, ILI9341_YELLOW);
+  drawTextDiff("PRESS: " + String(oilPress, 2), prevPressure, 10, 50, 3, ILI9341_GREEN);
 
   if (CAN_MSGAVAIL == CAN.checkReceive()) {
-    CAN.readMsgBuf(&rxId, &len, rxBuf);
+    DEBUG_SERIAL.println("CAN message available");
+    unsigned long rxId = 0;
+    byte len = 0;
 
-    // Read RPM
-    if (rxId == 0x280 && selectedScreen == 0) {
-      unsigned int rpm_raw = (rxBuf[3] << 8 | rxBuf[2]);
-      float rpm = rpm_raw / 4.0;
+    memset(canBuf, 0, sizeof(canBuf)); // clear buffer before read
 
-      String newTextRPM = "RPM: " + String(rpm, 0);
-      drawTextDiff(newTextRPM, prevRPM, 10, 90, 3, ILI9341_PINK);
+    if (CAN.readMsgBuf(&rxId, &len, canBuf) == CAN_OK && len > 0 && len <= 8) {
+      DEBUG_SERIAL.printf("CAN ID: 0x%03lX, Len: %u\n", rxId, len);
+      for (int i = 0; i < len; i++) DEBUG_SERIAL.printf("buf[%d] = 0x%02X\n", i, canBuf[i]);
+      DEBUG_SERIAL.println();
+
+      if (selectedScreen != 0) return;
+
+      switch (rxId) {
+        case 0x280:
+          DEBUG_SERIAL.println("Handling 0x280 - RPM");
+          if (len >= 4) {
+            uint16_t rawRPM = (canBuf[3] << 8) | canBuf[2];
+            float rpm = rawRPM / 4.0;
+            DEBUG_SERIAL.printf("Parsed RPM: %.2f\n", rpm);
+            String displayRPM = "RPM: " + String(rpm, 0);
+            drawTextDiff(displayRPM, prevRPM, 10, 90, 3, ILI9341_PINK);
+          } else {
+            DEBUG_SERIAL.println("Invalid len < 4 for RPM");
+          }
+          break;
+        case 0x288:
+          DEBUG_SERIAL.println("Handling 0x288 - Coolant");
+          if (len >= 2) {
+            float coolant = canBuf[1] * 0.75 - 48;
+            String displayCoolant = "Coolant: " + String(coolant, 0);
+            drawTextDiff(displayCoolant, prevCoolant, 10, 130, 3, ILI9341_OLIVE);
+          } else {
+            DEBUG_SERIAL.println("Invalid len < 2 for Coolant");
+          }
+          break;
+        case 0x380:
+          DEBUG_SERIAL.println("Handling 0x380 - IAT");
+          if (len >= 2) {
+            float iat = canBuf[1] * 0.75 - 48;
+            String displayIAT = "IAT: " + String(iat, 0);
+            drawTextDiff(displayIAT, prevIAT, 10, 170, 3, ILI9341_ORANGE);
+          } else {
+            DEBUG_SERIAL.println("Invalid len < 2 for IAT");
+          }
+          break;
+        case 0x588:
+          DEBUG_SERIAL.println("Handling 0x588 - Boost");
+          if (len >= 5) {
+            float boost = canBuf[4] * 0.75 - 48;
+            String displayBoost = "Boost: " + String(boost, 0);
+            drawTextDiff(displayBoost, prevBoost, 10, 210, 3, ILI9341_MAGENTA);
+          } else {
+            DEBUG_SERIAL.println("Invalid len < 5 for Boost");
+          }
+          break;
+        default:
+          DEBUG_SERIAL.printf("Unknown CAN ID: 0x%03lX\n", rxId);
+          break;
+      }
 
       lastCanMessageTime = millis();
+    } else {
+      DEBUG_SERIAL.println("CAN readMsgBuf failed or invalid len!");
     }
-
-    // Read coolant temp
-    if (rxId == 0x288 && selectedScreen == 0) {
-      unsigned int rawCoolant = rxBuf[1];
-      float coolant = rawCoolant * 0.75 - 48;
-
-      String newTextCoolant = "Coolant: " + String(coolant, 0);
-      drawTextDiff(newTextCoolant, prevCoolant, 10, 130, 3, ILI9341_OLIVE);
-
-      lastCanMessageTime = millis();
-    }
-
-    // Read IAT
-    if (rxId == 0x380 && selectedScreen == 0) {
-      unsigned int rawIAT = rxBuf[1];
-      float IAT = rawIAT * 0.75 - 48;
-
-      String newTextIAT = "IAT: " + String(IAT, 0);
-      drawTextDiff(newTextIAT, prevIAT, 10, 170, 3, ILI9341_ORANGE);
-
-      lastCanMessageTime = millis();
-    }
-
-    // Read boost
-    if (rxId == 0x588 && selectedScreen == 0) {
-      unsigned int rawBoost = rxBuf[4];
-      float boost = rawBoost * 0.75 - 48;
-
-      String newTextBoost = "Boost: " + String(boost, 0);
-      drawTextDiff(newTextBoost, prevBoost, 10, 210, 3, ILI9341_MAGENTA);
-
-      lastCanMessageTime = millis();
-    }
-
-    /*
-    // Read speed
-    if (rxId == 0x320 && selectedScreen == 0) {
-      unsigned int rawSpeed = (rxBuf[4] << 8 | rxBuf[3]);
-      float speed = rawSpeed / 4.0;
-
-      String newTextSpeed = "Speed: " + String(speed, 0);
-      drawTextDiff(newTextSpeed, prevSpeed, 10, 90, 3, ILI9341_CYAN);
-
-      lastCanMessageTime = millis();
-    }*/
   }
 
-  /*
-  // Deep sleep logic
-  if (millis() - lastCanMessageTime > inactivityTimeout) {
-    Serial.println("No CAN data for 10s. Going to sleep...");
-
-    tft.fillScreen(ILI9341_BLACK);
-    tft.writeCommand(ILI9341_DISPOFF);
-    tft.writeCommand(ILI9341_SLPIN);
-
-    pinMode(TFT_POWER_CTRL, INPUT_PULLDOWN);
-    delay(100);
-
-    esp_sleep_enable_ext0_wakeup((gpio_num_t)MCP_INT_PIN, 0);
-
-    esp_deep_sleep_start();
-  }*/
+  LOG_END();
 }
