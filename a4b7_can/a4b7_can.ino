@@ -41,32 +41,33 @@ float pressureValues[] = { 0, 2, 5, 8, 10 };
 
 byte canBuf[8] = { 0 };
 
-bool drawRawImage(const char *filename, int16_t x, int16_t y, int w, int h) {
-  File f = SPIFFS.open(filename, "r");
-
-  if (!f) {
-    DEBUG_SERIAL.print("Failed to open file: ");
-    DEBUG_SERIAL.println(filename);
+bool drawRawImage(const char *filename, int x, int y, int w, int h) {
+  DEBUG_SERIAL.printf("Opening file: %s\n", filename);
+  File file = SPIFFS.open(filename, "r");
+  if (!file) {
+    DEBUG_SERIAL.println("File open failed");
     return false;
   }
 
   uint16_t *lineBuf = (uint16_t *)malloc(w * 2);
   if (!lineBuf) {
-    DEBUG_SERIAL.println("Out of memory!");
-    f.close();
+    DEBUG_SERIAL.println("malloc failed");
+    file.close();
     return false;
   }
 
   for (int row = 0; row < h; row++) {
-    f.read((uint8_t *)lineBuf, w * 2);
+    if (file.read((uint8_t *)lineBuf, w * 2) != w * 2) {
+      DEBUG_SERIAL.printf("File read failed at row: %d\n", row);
+      break;
+    }
     portENTER_CRITICAL(&spiMutex);
     tft.drawRGBBitmap(x, y + row, lineBuf, w, 1);
     portEXIT_CRITICAL(&spiMutex);
   }
 
   free(lineBuf);
-  f.close();
-
+  file.close();
   return true;
 }
 
@@ -127,25 +128,36 @@ float interpolate(float *voltage, float *value, int count, float inputVoltage) {
   return -1;
 }
 
-void drawTextDiff(String newText, String &prevText, int x, int y, uint8_t textSize, uint16_t color) {
+void drawTextDiff(const String &newText, String &prevText, int x, int y, uint8_t size, uint16_t color) {
   if (newText == prevText) return;
 
-  int charW = 6 * textSize;
+  int charWidth = 6 * size;
+  int charHeight = 8 * size;
+  int maxLen = max(newText.length(), prevText.length());
 
   portENTER_CRITICAL(&spiMutex);
-  tft.setTextSize(textSize);
-  for (int i = 0; i < newText.length(); i++) {
-    char newChar = newText[i];
+  tft.setTextSize(size);
+  tft.setTextWrap(false);
+
+  for (int i = 0; i < maxLen; i++) {
+    char newChar = (i < newText.length()) ? newText[i] : ' ';
     char oldChar = (i < prevText.length()) ? prevText[i] : 0;
-    if (newChar != oldChar) {
-      tft.setCursor(x + i * charW, y);
-      tft.setTextColor(color, ILI9341_BLACK);
-      tft.print(newChar);
+
+    if (newChar != oldChar || i >= newText.length()) {
+      int cx = x + i * charWidth;
+      tft.fillRect(cx, y, charWidth, charHeight, ILI9341_BLACK);
+      if (i < newText.length()) {
+        tft.setCursor(cx, y);
+        tft.setTextColor(color);
+        tft.print(newChar);
+      }
     }
   }
+
   portEXIT_CRITICAL(&spiMutex);
   prevText = newText;
 }
+
 
 void loop() {
   analogReadResolution(12);
@@ -178,6 +190,7 @@ void loop() {
             DEBUG_SERIAL.printf("Parsed RPM: %.2f\n", rpm);
             String displayRPM = "RPM: " + String(rpm, 0);
             drawTextDiff(displayRPM, prevRPM, 10, 90, 3, ILI9341_PINK);
+            prevRPM = displayRPM;
           } else {
             DEBUG_SERIAL.println("Invalid len < 4 for RPM");
           }
@@ -187,6 +200,7 @@ void loop() {
             float coolant = canBuf[1] * 0.75 - 48;
             String displayCoolant = "Coolant: " + String(coolant, 0);
             drawTextDiff(displayCoolant, prevCoolant, 10, 130, 3, ILI9341_OLIVE);
+            prevCoolant = displayCoolant;
           } else {
             DEBUG_SERIAL.println("Invalid len < 2 for Coolant");
           }
@@ -196,15 +210,17 @@ void loop() {
             float iat = canBuf[1] * 0.75 - 48;
             String displayIAT = "IAT: " + String(iat, 0);
             drawTextDiff(displayIAT, prevIAT, 10, 170, 3, ILI9341_ORANGE);
+            prevIAT = displayIAT;
           } else {
             DEBUG_SERIAL.println("Invalid len < 2 for IAT");
           }
           break;
         case 0x588:
           if (len >= 5) {
-            float boost = canBuf[4] * 0.75 - 48;
-            String displayBoost = "Boost: " + String(boost, 0);
+            float boost = canBuf[4] / 1000;
+            String displayBoost = "Boost: " + String(boost, 2);
             drawTextDiff(displayBoost, prevBoost, 10, 210, 3, ILI9341_MAGENTA);
+            prevBoost = displayBoost;
           } else {
             DEBUG_SERIAL.println("Invalid len < 5 for Boost");
           }
