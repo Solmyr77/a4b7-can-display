@@ -217,7 +217,7 @@ void loop() {
           break;
         case 0x588:
           if (len >= 5) {
-            float boost = canBuf[4] / 1000;
+            float boost = canBuf[4];
             String displayBoost = "Boost: " + String(boost, 2);
             drawTextDiff(displayBoost, prevBoost, 10, 210, 3, ILI9341_MAGENTA);
             prevBoost = displayBoost;
@@ -225,6 +225,16 @@ void loop() {
             DEBUG_SERIAL.println("Invalid len < 5 for Boost");
           }
           break;
+        /*case 0x320:
+          if (len >= 5) {
+            float speed = (canBuf[4] << 8) | canBuf[3];
+            String displaySpeed = "Speed: " + String(speed, 2);
+            drawTextDiff(displaySpeed, prevSpeed, 10, 210, 3, ILI9341_MAGENTA);
+            prevSpeed = displaySpeed;
+          } else {
+            DEBUG_SERIAL.println("Invalid len < 5 for Boost");
+          }
+          break;*/
         default:
           break;
       }
