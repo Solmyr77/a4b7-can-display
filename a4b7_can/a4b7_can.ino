@@ -28,6 +28,7 @@ MCP_CAN CAN(MCP_CS_PIN);
 
 constexpr unsigned long INACTIVITY_TIMEOUT = 10000'0000;
 unsigned long lastCanMessageTime = 0;
+unsigned long lastRefresh = 0;
 uint8_t selectedScreen = 0;
 
 String prevTemperature, prevRPM, prevPressure, prevCoolant, prevIAT, prevBoost, prevSpeed;
@@ -93,6 +94,7 @@ void initCan() {
     tft.println("retrying . . .");
     delay(1000);
   }
+  createFilters();
   CAN.setMode(MCP_LISTENONLY);
   drawRawImage("/startup.raw", 0, 0, 320, 240);
   delay(3000);
@@ -100,16 +102,18 @@ void initCan() {
 }
 
 void createFilters() {
-  // Set mask to match all 11 bits (standard ID)
-  CAN.init_Mask(0, false, 0x7FF);  // filters 0 and 1
-  CAN.init_Mask(1, false, 0x7FF);  // filters 2–5
+  CAN.init_Mask(0, false, 0x7FF);  // RXB0: Filters 0,1
+  CAN.init_Mask(1, false, 0x7FF);  // RXB1: Filters 2–5
 
-  // Set each filter to a specific ID
+  // RXB0 filters
   CAN.init_Filt(0, false, 0x280);
   CAN.init_Filt(1, false, 0x288);
+
+  // RXB1 filters
   CAN.init_Filt(2, false, 0x380);
   CAN.init_Filt(3, false, 0x588);
   CAN.init_Filt(4, false, 0x320);
+  CAN.init_Filt(5, false, 0x7FE);  // Dummy ID unlikely to match anything
 }
 
 void createGraphics() {
@@ -200,8 +204,12 @@ float interpolate(float *voltage, float *value, int count, float inputVoltage) {
 }
 
 void drawTextDiff(const String &newText, String &prevText, int x, int y, uint8_t size, uint16_t color) {
+  if (!(millis() - lastRefresh > 33)) {
+    return;
+  }
+
   if (newText == prevText) return;
-  int charWidth = 6 * size;
+  int charWidth = 5 * size;
   portENTER_CRITICAL(&spiMutex);
   tft.setTextSize(size);
   for (int i = 0; i < newText.length(); i++) {
@@ -215,6 +223,8 @@ void drawTextDiff(const String &newText, String &prevText, int x, int y, uint8_t
   }
   portEXIT_CRITICAL(&spiMutex);
   prevText = newText;
+
+  lastRefresh = millis();
 }
 
 void loop() {
@@ -277,7 +287,7 @@ void loop() {
           if (len >= 2) {
             float iat = canBuf[1] * 0.75 - 48;
             String displayIat = String(iat, 0);
-            drawTextDiff(displayIat, prevIAT, 226, 188, 3, ILI9341_GREEN);
+            drawTextDiff(displayIat, prevIAT, 10, 188, 5, ILI9341_GREEN);
           } else {
             DEBUG_SERIAL.println("Invalid len < 2 for IAT");
           }
