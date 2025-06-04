@@ -99,6 +99,19 @@ void initCan() {
   tft.fillScreen(ILI9341_BLACK);
 }
 
+void createFilters() {
+  // Set mask to match all 11 bits (standard ID)
+  CAN.init_Mask(0, false, 0x7FF);  // filters 0 and 1
+  CAN.init_Mask(1, false, 0x7FF);  // filters 2–5
+
+  // Set each filter to a specific ID
+  CAN.init_Filt(0, false, 0x280);
+  CAN.init_Filt(1, false, 0x288);
+  CAN.init_Filt(2, false, 0x380);
+  CAN.init_Filt(3, false, 0x588);
+  CAN.init_Filt(4, false, 0x320);
+}
+
 void createGraphics() {
   portENTER_CRITICAL(&spiMutex);
 
@@ -216,11 +229,9 @@ void loop() {
 
   // ROW: 0, COL: 2
   drawTextDiff(String(oilPress, 1), prevPressure, 226, 98, 5, ILI9341_GREEN);
-  prevPressure = String(oilPress, 1);
 
   // ROW: 1, COL: 2
   drawTextDiff(String(oilTemp, 0), prevTemperature, 226, 188, 5, ILI9341_GREEN);
-  prevTemperature = String(oilTemp, 0);
 
   if (CAN_MSGAVAIL == CAN.checkReceive()) {
     unsigned long rxId = 0;
@@ -229,6 +240,20 @@ void loop() {
     memset(canBuf, 0, sizeof(canBuf));
 
     if (CAN.readMsgBuf(&rxId, &len, canBuf) == CAN_OK && len > 0 && len <= 8) {
+
+      // Logging
+      DEBUG_SERIAL.print("CAN ID: 0x");
+      DEBUG_SERIAL.print(rxId, HEX);
+      DEBUG_SERIAL.print(" DLC: ");
+      DEBUG_SERIAL.print(len);
+      DEBUG_SERIAL.print(" Data: ");
+      for (int i = 0; i < len; i++) {
+        if (canBuf[i] < 0x10) DEBUG_SERIAL.print("0");  // Leading zero
+        DEBUG_SERIAL.print(canBuf[i], HEX);
+        DEBUG_SERIAL.print(" ");
+      }
+      DEBUG_SERIAL.println();
+
       switch (rxId) {
         case 0x280:
           if (len >= 4) {
@@ -242,8 +267,8 @@ void loop() {
         case 0x288:
           if (len >= 2) {
             float coolant = canBuf[1] * 0.75 - 48;
-            drawTextDiff(String(coolant, 0), prevCoolant, 112, 188, 5, ILI9341_GREEN);
-            prevCoolant = String(coolant, 0);
+            String displayCoolant = String(coolant, 0);
+            drawTextDiff(displayCoolant, prevCoolant, 112, 188, 5, ILI9341_GREEN);
           } else {
             DEBUG_SERIAL.println("Invalid len < 2 for Coolant");
           }
@@ -251,8 +276,8 @@ void loop() {
         case 0x380:
           if (len >= 2) {
             float iat = canBuf[1] * 0.75 - 48;
-            drawTextDiff(String(iat, 0), prevIAT, 226, 188, 3, ILI9341_GREEN);
-            prevIAT = String(iat, 0);
+            String displayIat = String(iat, 0);
+            drawTextDiff(displayIat, prevIAT, 226, 188, 3, ILI9341_GREEN);
           } else {
             DEBUG_SERIAL.println("Invalid len < 2 for IAT");
           }
@@ -261,8 +286,8 @@ void loop() {
           if (len >= 5) {
             float rawBoost = canBuf[4] * 10 - 1000;
             float boost = rawBoost / 1000;
-            drawTextDiff(String(boost, 2), prevBoost, 112, 102, 4, ILI9341_GREEN);
-            prevBoost = String(boost, 2);
+            String displayBoost = String(boost, 2);
+            drawTextDiff(displayBoost, prevBoost, 112, 102, 4, ILI9341_GREEN);
           } else {
             DEBUG_SERIAL.println("Invalid len < 5 for Boost");
           }
@@ -270,8 +295,8 @@ void loop() {
         case 0x320:
           if (len >= 5) {
             float speed = (canBuf[4] << 8) | canBuf[3];
-            drawTextDiff(String(speed, 0), prevSpeed, 10, 102, 4, ILI9341_GREEN);
-            prevSpeed = String(speed, 0);
+            String displaySpeed = String(speed, 0);
+            drawTextDiff(displaySpeed, prevSpeed, 10, 102, 4, ILI9341_GREEN);
           } else {
             DEBUG_SERIAL.println("Invalid len < 5 for Speed");
           }
